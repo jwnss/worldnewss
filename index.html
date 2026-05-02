@@ -149,6 +149,22 @@
 <!-- <meta name="google-site-verification" content="YOUR_CODE_HERE"/> -->
 <!-- <meta name="msvalidate.01" content="YOUR_BING_CODE_HERE"/> -->
 
+<!-- ═══════════════════════════════════════════════
+     GOOGLE ADSENSE
+     STEP 1: Replace ca-pub-XXXXXXXXXXXXXXXXX below
+             with your actual AdSense Publisher ID.
+     STEP 2: Replace each data-ad-slot="0000000000"
+             with the slot IDs from your AdSense dashboard.
+     STEP 3: Uncomment the script tag below.
+     Leave commented until AdSense approves your site.
+═══════════════════════════════════════════════ -->
+<!-- <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXXXXXXXXXXXXXXX" crossorigin="anonymous"></script> -->
+<script>
+// AdSense Publisher ID — replace with yours after approval
+var ADSENSE_PUB = 'ca-pub-XXXXXXXXXXXXXXXXX';
+var ADSENSE_ENABLED = false; // set to true after AdSense approves your site
+</script>
+
 <style>
 :root{--ink:#0d0d0d;--ink2:#3a3a3a;--ink3:#777;--paper:#e8e4db;--paper2:#dedad0;--rule:#c4bdb0;--red:#be2b2b;--navy:#1a3357;--gold:#b07d2a;--mono:'JetBrains Mono',monospace;--serif:'Source Serif 4',Georgia,serif;--disp:'Playfair Display',Georgia,serif}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -156,7 +172,22 @@ html{text-size-adjust:100%;-webkit-text-size-adjust:100%}
 body{font-family:var(--serif);background:var(--paper);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 img{max-width:100%;height:auto}
 a{color:inherit}
-/* MASTHEAD */
+/* ADSENSE AD UNITS */
+.ad-unit{width:100%;overflow:hidden;background:transparent;text-align:center;position:relative}
+.ad-unit ins{display:block}
+.ad-label{font-family:var(--mono);font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink3);text-align:center;margin-bottom:4px;opacity:.6}
+/* Leaderboard — below controls bar */
+.ad-leaderboard{max-width:728px;margin:1rem auto;padding:0 1rem}
+/* In-feed banner — between story rows */
+.ad-infeed{max-width:1200px;margin:1.5rem auto;padding:0}
+.ad-infeed-inner{background:#fff;border:1px solid var(--rule);padding:.75rem;display:flex;align-items:center;justify-content:center;min-height:90px}
+/* Sidebar rectangle — right column */
+.ad-sidebar{width:300px;min-height:250px;margin-top:1rem;flex-shrink:0}
+/* Footer leaderboard */
+.ad-footer{max-width:728px;margin:1rem auto .5rem;padding:0 1rem}
+/* Responsive */
+@media(max-width:768px){.ad-leaderboard,.ad-footer{max-width:100%}.ad-infeed-inner{min-height:60px}}
+@media(max-width:480px){.ad-sidebar{display:none}}
 .mast{background:var(--ink);position:sticky;top:0;z-index:200;border-bottom:3px solid var(--red)}
 .mast-top{display:flex;justify-content:space-between;align-items:center;padding:.4rem 1.5rem;border-bottom:1px solid rgba(255,255,255,.08);font-family:var(--mono);font-size:10px;color:rgba(255,255,255,.4)}
 .ldot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4caf50;margin-right:5px;vertical-align:middle}
@@ -277,6 +308,18 @@ a{color:inherit}
   </div>
 </div>
 <main class="wrap">
+
+  <!-- AD UNIT 1: Leaderboard (728x90) — high visibility, top of content -->
+  <div class="ad-leaderboard" id="ad-top">
+    <div class="ad-label">Advertisement</div>
+    <!-- Replace slot ID with yours from AdSense dashboard -->
+    <ins class="adsbygoogle"
+         style="display:block;min-height:90px"
+         data-ad-client="ca-pub-XXXXXXXXXXXXXXXXX"
+         data-ad-slot="1111111111"
+         data-ad-format="horizontal"
+         data-full-width-responsive="true"></ins>
+  </div>
   <div class="ls" id="lsc">
     <div class="lhl">Scanning the World</div>
     <div class="lsub">Fetching breaking news from trusted sources</div>
@@ -293,6 +336,18 @@ a{color:inherit}
 <div class="ov" id="ov" onclick="if(event.target===this)cm()">
   <div class="modal"><button class="mclose" onclick="cm()">&#x2715;</button><div id="mi"></div></div>
 </div>
+<!-- AD UNIT 5: Footer leaderboard — high viewability as users finish reading -->
+<div class="ad-leaderboard" id="ad-footer-wrap" style="margin:1rem auto .5rem">
+  <div class="ad-label">Advertisement</div>
+  <ins class="adsbygoogle"
+       id="ad-footer"
+       style="display:block;min-height:90px"
+       data-ad-client="ca-pub-XXXXXXXXXXXXXXXXX"
+       data-ad-slot="5555555555"
+       data-ad-format="auto"
+       data-full-width-responsive="true"></ins>
+</div>
+
 <footer class="foot">World News Summaries &copy; 2026 &middot; <a href="https://www.worldnss.com" style="color:rgba(255,255,255,.4);text-decoration:none">worldnss.com</a> &middot; Breaking news from BBC &bull; Reuters &bull; Al Jazeera &bull; Guardian &bull; Bloomberg &bull; TechCrunch &bull; NASA &bull; ESPN &bull; NHK &bull; Times of India &amp; 50+ more &middot; Updated every 30 min</footer>
 <!-- SEO keyword content for crawlers -->
 <div aria-hidden="true" style="display:none">
@@ -719,21 +774,36 @@ function renderFeed(list){
 
   if(grid1.length) out += '<div class="g3">'+grid1.map(cardH).join('')+'</div>';
 
+  // AD UNIT 2: In-feed leaderboard — after first row of cards
+  out += adUnitHtml('ad-infeed-1','2222222222','horizontal');
+
   if(main2.length){
     out += ruleH(activeF==='All'?'Around The World':'More '+activeF);
     out += '<div class="twocol"><div class="g2">'+main2.map(cardH).join('')+'</div>';
+    out += '<div style="display:flex;flex-direction:column;gap:0">';
     if(side.length) out += '<div class="sb"><div class="sbt">Also In The News</div>'+side.map(siH).join('')+'</div>';
-    out += '</div>';
+    // AD UNIT 3: Sidebar rectangle (300x250) — best performing format
+    out += adUnitHtml('ad-sidebar-1','3333333333','rectangle');
+    out += '</div></div>';
   }
+
   if(grid2.length) out += ruleH('Further Coverage')+'<div class="g3">'+grid2.map(cardH).join('')+'</div>';
-  if(grid3.length) out += ruleH('More Stories')+'<div class="g3">'+grid3.map(cardH).join('')+'</div>';
-  if(rest.length)  out += ruleH('Additional Stories')+'<div class="g3">'+rest.slice(0,12).map(cardH).join('')+'</div>';
+
+  // AD UNIT 4: In-feed between grid rows
+  if(grid3.length){
+    out += adUnitHtml('ad-infeed-2','4444444444','horizontal');
+    out += ruleH('More Stories')+'<div class="g3">'+grid3.map(cardH).join('')+'</div>';
+  }
+
+  if(rest.length) out += ruleH('Additional Stories')+'<div class="g3">'+rest.slice(0,12).map(cardH).join('')+'</div>';
 
   var upd=new Date().toLocaleTimeString('en-US',{hour:'2-digit',minute:'2-digit',timeZoneName:'short'});
   out+='<div style="text-align:center;margin-top:1.5rem;font-family:var(--mono);font-size:10px;color:var(--ink3)">'+
        list.length+' stories loaded &middot; Last updated: '+upd+'</div>';
   fd.innerHTML=out;
   fd.style.animation='fu 0.5s ease';
+  // Activate AdSense units after DOM injection
+  pushAds();
 }
 
 // ── MODAL ─────────────────────────────────────────────
@@ -845,7 +915,35 @@ async function init(){
   }finally{document.getElementById('rb').disabled=false}
 }
 
-clock();setInterval(clock,60000);init();
+// ── ADSENSE HELPERS ───────────────────────────────────
+function adUnitHtml(elemId,slotId,format){
+  if(!ADSENSE_ENABLED)return'';
+  var style=format==='rectangle'?'display:block;width:300px;min-height:250px;margin:.75rem auto':
+            format==='horizontal'?'display:block;width:100%;min-height:90px':
+            'display:block';
+  return '<div class="ad-unit" style="margin:1.25rem 0">'+
+    '<div class="ad-label">Advertisement</div>'+
+    '<ins class="adsbygoogle" id="'+elemId+'" style="'+style+'" '+
+    'data-ad-client="'+ADSENSE_PUB+'" '+
+    'data-ad-slot="'+slotId+'" '+
+    'data-ad-format="auto" '+
+    'data-full-width-responsive="true"></ins>'+
+    '</div>';
+}
+function pushAds(){
+  if(!ADSENSE_ENABLED||typeof adsbygoogle==='undefined')return;
+  try{
+    document.querySelectorAll('.adsbygoogle:not([data-ad-status])').forEach(function(){
+      (window.adsbygoogle=window.adsbygoogle||[]).push({});
+    });
+  }catch(ex){console.warn('AdSense:',ex);}
+}
+
+// ── BOOT ─────────────────────────────────────────────
+clock();setInterval(clock,60000);
+// Push static ad units (top leaderboard + footer) on load
+if(ADSENSE_ENABLED){ window.addEventListener('load', pushAds); }
+init();
 </script>
 </body>
 </html>
