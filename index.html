@@ -361,7 +361,7 @@ var REFRESH = 1800000; // 30 min
 var CATS = ['All','World','Politics','Business','Technology','Health','Science','Sports','Entertainment','Climate','Arts'];
 var CCLR = {world:'#1a3357',politics:'#6b2222',business:'#3a3a1a',technology:'#1a4a3a',health:'#1a3a4a',science:'#2a1a4a',sports:'#1a4a4a',entertainment:'#3a1a4a',climate:'#1a4a2a',arts:'#4a2a1a'};
 var CEMJ = {world:'🌍',politics:'🏛️',business:'📈',technology:'💻',health:'🏥',science:'🔬',sports:'⚽',entertainment:'🎭',climate:'🌱',arts:'🎨'};
-var SLBLS = ['Connecting to 60+ global sources...','Fetching news from all categories in parallel...','Verifying and categorising stories...','Ensuring minimum 10 stories per category...','Rendering your personalised feed...'];
+var SLBLS = ['Connecting to 60+ global sources...','Fetching news from all categories in parallel...','Processing and categorising stories...','Translating non-English articles...','Building your news feed...'];
 
 // ── STATE ────────────────────────────────────────────
 var stories=[], filtered=[], activeF='All', rt=null, ct=null, sl=1800;
@@ -447,7 +447,73 @@ function iqKw(t,cat){
 }
 
 // ══════════════════════════════════════════════════════
-// MULTI-SOURCE NEWS FETCHER
+// TRANSLATION SYSTEM
+// Uses Google Translate's public endpoint (no key needed).
+// Detects non-English articles and translates title + desc.
+// Results are cached to avoid re-translating on filter switch.
+// ══════════════════════════════════════════════════════
+
+var translCache = {}; // cache by original title to avoid duplicate calls
+
+// Detect if text is likely non-English using simple heuristics
+// then confirm with Google's language detection
+function looksNonEnglish(text) {
+  if (!text || text.length < 8) return false;
+  // Common non-Latin scripts — definitely need translation
+  if (/[\u0400-\u04FF\u0600-\u06FF\u0900-\u097F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7FF\u0E00-\u0E7F]/.test(text)) return true;
+  // Latin-based heuristics: common non-English function words
+  if (/\b(der|die|das|und|ist|mit|des|von|zu|im|als|auf|für|nicht|aber|auch|eine|einer|einem|einen|durch|nach|über|unter|vor|bei|seit|während|zwischen)\b/i.test(text)) return true; // German
+  if (/\b(le|la|les|un|une|des|est|dans|sur|avec|pour|par|du|au|aux|ce|et|en|ne|pas|que|qui|se|il|elle|ils|elles|nous|vous|leur|leurs|son|sa|ses|mon|ma|mes|ton|ta|tes|plus|très|bien|tout|aussi|mais|ou|donc|car|ni|comme)\b/i.test(text)) return true; // French
+  if (/\b(el|la|los|las|un|una|unos|unas|del|al|con|por|para|que|en|de|se|es|lo|su|sus|pero|más|este|esta|estos|estas|ese|esa|esos|esas|fue|ser|estar|tener|hacer|poder|decir|año|años|país|gobierno|según)\b/i.test(text)) return true; // Spanish
+  if (/\b(il|lo|la|le|gli|le|un|uno|una|del|della|dei|degli|degli|delle|nel|nella|nei|nelle|sul|sulla|sui|sulle|con|per|tra|fra|che|non|ma|si|ha|hanno|era|sono|stato|stata|stati|state|questo|questa|questi|queste|anno|anni|paese|governo)\b/i.test(text)) return true; // Italian
+  if (/\b(de|het|een|van|in|op|te|is|dat|die|den|der|niet|aan|ook|maar|om|als|met|er|zijn|was|worden|heeft|hebben|naar|uit|voor|over|door|nog|al|kan|worden|jaar|land|worden|nieuwe|eerste)\b/i.test(text)) return true; // Dutch
+  if (/\b(и|в|на|не|с|к|а|по|из|за|это|как|его|то|все|ее|так|что|но|он|она|мы|вы|они|их|там|где|когда|если|уже|еще)\b/i.test(text)) return true; // Russian (Latin-transliterated check)
+  return false;
+}
+
+// Translate text using Google Translate public endpoint
+async function translateToEnglish(text) {
+  if (!text || text.length < 5) return text;
+  var key = text.slice(0, 60);
+  if (translCache[key]) return translCache[key];
+  try {
+    var url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=' + encodeURIComponent(text.slice(0, 500));
+    var r = await fetch(url);
+    if (!r.ok) return text;
+    var data = await r.json();
+    // Google returns nested arrays: [[["translated","original",null,null,1],...],...]
+    var translated = '';
+    if (data && data[0]) {
+      data[0].forEach(function(chunk) { if (chunk && chunk[0]) translated += chunk[0]; });
+    }
+    var result = translated.trim() || text;
+    translCache[key] = result;
+    return result;
+  } catch(ex) {
+    return text; // silently fall back to original if translation fails
+  }
+}
+
+// Translate an article object in-place if it appears non-English
+async function ensureEnglish(article) {
+  var needsTranslation = looksNonEnglish(article.title) || looksNonEnglish(article.description);
+  if (!needsTranslation) return article;
+  try {
+    // Translate title and description in parallel
+    var [tTitle, tDesc] = await Promise.all([
+      translateToEnglish(article.title),
+      translateToEnglish(article.description)
+    ]);
+    article.title       = tTitle || article.title;
+    article.description = tDesc  || article.description;
+    article._translated = true; // flag for debugging
+  } catch(ex) {
+    // Translation failed — keep original, don't break the feed
+  }
+  return article;
+}
+
+
 // Pulls from RSS feeds via rss2json covering every
 // category and region — world, local, politics, sport,
 // science, climate, arts, health, tech, business.
@@ -654,7 +720,20 @@ async function fetchAll(){
   var underMin=Object.keys(catCounts).filter(function(c){return catCounts[c]<MIN_PER_CAT;});
   if(underMin.length) console.info('[WNS] Low story count for:', underMin.join(', '), catCounts);
 
+  // ── TRANSLATION PASS ──────────────────────────────
+  // Translate any non-English articles to English in parallel batches
+  // Use batches of 8 to avoid overwhelming the translate API
   setStep(5);
+  var toTranslate = all.filter(function(a){ return looksNonEnglish(a.title) || looksNonEnglish(a.description); });
+  if (toTranslate.length > 0) {
+    console.info('[WNS] Translating', toTranslate.length, 'non-English articles...');
+    var batchSize = 8;
+    for (var bi = 0; bi < toTranslate.length; bi += batchSize) {
+      var batch = toTranslate.slice(bi, bi + batchSize);
+      await Promise.allSettled(batch.map(ensureEnglish));
+    }
+    console.info('[WNS] Translation complete.');
+  }
   if(!all.length) throw new Error('All news sources failed to respond. Please check your internet connection and try again.');
 
   // Sort newest-first. Stories older than 48h go to the back.
@@ -676,7 +755,8 @@ function tagH(cat,sm){
 }
 function metaH(a){
   var reg=a.region?'<span style="background:rgba(26,51,87,0.08);border-radius:2px;padding:1px 5px;font-size:9px;letter-spacing:.06em">'+e(a.region)+'</span>':'';
-  return '<div class="meta"><span>'+e(a.source)+(reg?' &nbsp;'+reg:'')+'</span><span>'+rel(a.publishedAt)+'</span></div>';
+  var tr=a._translated?'<span style="background:rgba(26,87,51,0.1);border-radius:2px;padding:1px 5px;font-size:9px;letter-spacing:.06em;color:#1a5733" title="Auto-translated to English">🌐 Translated</span>':'';
+  return '<div class="meta"><span>'+e(a.source)+(reg?' &nbsp;'+reg:'')+(tr?' &nbsp;'+tr:'')+'</span><span>'+rel(a.publishedAt)+'</span></div>';
 }
 function noimg(cat,h){
   return '<div class="noimg" style="height:'+h+'px;min-height:'+h+'px">'+ce(cat)+'</div>';
