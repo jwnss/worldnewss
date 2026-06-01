@@ -241,120 +241,289 @@ function iqKw(t,cat){
 
 // ══════════════════════════════════════════════════════
 
-// ── FETCH: Anthropic AI — sequential to avoid rate limits ─
-async function fetchAIGroup(categories, count){
-  var prompt = 'Search the web right now and find '+count+' real breaking news stories published in the last 12 hours covering these categories: '+categories+'. Use BBC, Reuters, AP, Al Jazeera, Bloomberg, Guardian, NPR, TechCrunch, ESPN, NASA, Science Daily, Variety. Return ONLY a raw JSON array — no markdown, no code blocks, nothing before [ or after ]. Each item needs these exact keys: title (string), description (2-3 sentence summary string), url (string), image (image url or empty string), publishedAt (ISO timestamp), source (publication name), region (Global/N.America/Europe/Asia-Pacific/Middle East/Africa/Latin America), category (World/Politics/Business/Technology/Health/Science/Climate/Sports/Entertainment/Arts).';
+// ══════════════════════════════════════════════════════
+// NEWS FETCH — No proxies, no AbortController
+// Uses only APIs with native CORS support
+// ══════════════════════════════════════════════════════
 
-  for(var attempt=0; attempt<3; attempt++){
-    try{
-      var res=await fetch('https://api.anthropic.com/v1/messages',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-          model:'claude-haiku-4-5-20251001',
-          max_tokens:8000,
-          tools:[{type:'web_search_20250305',name:'web_search'}],
-          messages:[{role:'user',content:prompt}]
-        })
-      });
-      if(res.status===429){
-        // Rate limited — wait longer before retry
-        var wait = attempt===0 ? 5000 : 12000;
-        console.log('[WNS] Rate limited on '+categories.split(',')[0].trim()+', waiting '+wait/1000+'s...');
-        await new Promise(function(r){setTimeout(r,wait);});
-        continue;
-      }
-      if(!res.ok) throw new Error('HTTP '+res.status);
-      var data=await res.json();
-      var text=(data.content||[]).filter(function(b){return b.type==='text';}).map(function(b){return b.text;}).join('');
-      var clean=text.replace(/```json|```/g,'').trim();
-      var s=clean.indexOf('['),en=clean.lastIndexOf(']');
-      if(s===-1||en===-1) throw new Error('No JSON array');
-      var items=JSON.parse(clean.slice(s,en+1));
-      if(!Array.isArray(items)||items.length===0) throw new Error('Empty array');
-      var valid=items.map(function(a){
-        var t=(a.title||'').trim(),cat=a.category||classify(t,a.description||'');
-        return{title:t,description:(a.description||'').trim(),url:a.url||'#',image:a.image||'',publishedAt:a.publishedAt||new Date().toISOString(),source:a.source||'News',region:a.region||'Global',_cat:cat,_iq:iqKw(t,cat),_id:0};
-      }).filter(function(a){return a.title&&a.title.length>5;});
-      console.log('[WNS] '+categories.split(',')[0].trim()+': got '+valid.length+' stories');
-      return valid;
-    }catch(ex){
-      console.log('[WNS] fetchAIGroup attempt '+(attempt+1)+' failed ('+categories.split(',')[0].trim()+'): '+ex.message);
-      if(attempt<2) await new Promise(function(r){setTimeout(r,3000);});
-    }
-  }
-  return [];
-}
-
-// ── FETCH: HackerNews (guaranteed CORS-free) ──────────
+// ── SOURCE 1: HackerNews Firebase API ─────────────────
+// Native CORS, no key, always works
 async function fetchHN(){
   try{
-    var ids=await fetch('https://hacker-news.firebaseio.com/v0/topstories.json').then(function(r){return r.json();});
-    var items=await Promise.allSettled(ids.slice(0,40).map(function(id){
-      return fetch('https://hacker-news.firebaseio.com/v0/item/'+id+'.json').then(function(r){return r.json();}).catch(function(){return null;});
+    var ids=await fetch('https://hacker-news.firebaseio.com/v0/topstories.json')
+      .then(function(r){return r.json();});
+    var top=ids.slice(0,40);
+    var results=await Promise.allSettled(top.map(function(id){
+      return fetch('https://hacker-news.firebaseio.com/v0/item/'+id+'.json')
+        .then(function(r){return r.json();}).catch(function(){return null;});
     }));
     var all=[];
-    items.forEach(function(r){
+    results.forEach(function(r){
       if(r.status!=='fulfilled'||!r.value||!r.value.title||r.value.type!=='story')return;
-      var t=r.value.title,cat=classify(t,'');
-      all.push({title:t,description:'Trending on Hacker News with '+(r.value.score||0)+' points and '+(r.value.descendants||0)+' comments. Click to read the full article.',url:r.value.url||'https://news.ycombinator.com/item?id='+r.value.id,image:'',publishedAt:new Date((r.value.time||Date.now()/1000)*1000).toISOString(),source:'Hacker News',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0});
+      var t=r.value.title, cat=classify(t,'');
+      all.push({
+        title:t,
+        description:'Trending on Hacker News with '+(r.value.score||0)+' points and '+(r.value.descendants||0)+' comments.',
+        url:r.value.url||'https://news.ycombinator.com/item?id='+r.value.id,
+        image:'',publishedAt:new Date((r.value.time||Date.now()/1000)*1000).toISOString(),
+        source:'Hacker News',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0
+      });
     });
     return all;
-  }catch(ex){return [];}
+  }catch(ex){console.log('[WNS] HN failed:'+ex.message);return[];}
 }
 
-// ── MASTER FETCH — sequential AI calls to avoid rate limits ──
+// ── SOURCE 2: Wikipedia Current Events ────────────────
+// Native CORS via origin=*, no key, no proxy
+async function fetchWiki(){
+  try{
+    var url='https://en.wikipedia.org/w/api.php?action=query&titles=Portal:Current_events&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*&formatversion=2';
+    var data=await fetch(url).then(function(r){return r.json();});
+    var rev=((((data.query||{}).pages||[])[0]||{}).revisions||[])[0];
+    var text=(rev&&rev.slots&&rev.slots.main&&rev.slots.main.content)||'';
+    var all=[];
+    text.split('\n').forEach(function(line){
+      var m=line.match(/^\*+\s*(.{25,200})/);
+      if(!m)return;
+      var raw=m[1]
+        .replace(/\[\[([^\]|]+)\|?[^\]]*\]\]/g,'$1')
+        .replace(/'{2,}/g,'')
+        .replace(/\{\{[^}]+\}\}/g,'')
+        .replace(/<[^>]+>/g,'')
+        .trim();
+      if(raw.length<25||raw.length>250||raw.includes('{{'))return;
+      var cat=classify(raw,'');
+      all.push({title:raw,description:'Current event from Wikipedia. Click to read more.',
+        url:'https://en.wikipedia.org/wiki/Portal:Current_events',
+        image:'',publishedAt:new Date().toISOString(),
+        source:'Wikipedia',region:'Global',_cat:cat,_iq:iqKw(raw,cat),_id:0});
+    });
+    return all.slice(0,25);
+  }catch(ex){console.log('[WNS] Wiki failed:'+ex.message);return[];}
+}
+
+// ── SOURCE 3: Wikipedia Recent Changes ────────────────
+// Different endpoint — pulls actively edited news articles
+async function fetchWikiRecent(){
+  try{
+    var url='https://en.wikipedia.org/w/api.php?action=query&list=recentchanges&rcnamespace=0&rclimit=50&rcprop=title|timestamp|comment&rctype=edit&format=json&origin=*';
+    var data=await fetch(url).then(function(r){return r.json();});
+    var changes=(data.query||{}).recentchanges||[];
+    var seen=new Set(), all=[];
+    changes.forEach(function(c){
+      var t=(c.title||'').replace(/_/g,' ').trim();
+      if(!t||t.length<8||seen.has(t))return;
+      // Filter to news-worthy titles (not talk pages, user pages etc)
+      if(/^(Talk|User|Wikipedia|File|Template|Help|Category|Portal|Draft|Module):/i.test(t))return;
+      seen.add(t);
+      var cat=classify(t,c.comment||'');
+      all.push({title:t,description:'Breaking: This Wikipedia article is being actively updated right now. '+
+        (c.comment?'Edit summary: '+c.comment.slice(0,120)+'.':'Click to read the latest.'),
+        url:'https://en.wikipedia.org/wiki/'+encodeURIComponent(t.replace(/ /g,'_')),
+        image:'',publishedAt:c.timestamp||new Date().toISOString(),
+        source:'Wikipedia Live',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0});
+    });
+    return all.slice(0,20);
+  }catch(ex){console.log('[WNS] WikiRecent failed:'+ex.message);return[];}
+}
+
+// ── SOURCE 4: Wikipedia News Search ───────────────────
+// Search for articles in the news category
+async function fetchWikiNews(){
+  try{
+    var queries=['breaking news today','world news','politics news','technology news','science news','sports news','business economy','health medical','climate environment','entertainment'];
+    var all=[], seen=new Set();
+    var results=await Promise.allSettled(queries.slice(0,5).map(function(q){
+      var url='https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch='+encodeURIComponent(q)+'&srlimit=8&srprop=snippet&format=json&origin=*';
+      return fetch(url).then(function(r){return r.json();});
+    }));
+    results.forEach(function(r,i){
+      if(r.status!=='fulfilled'||!r.value||!r.value.query)return;
+      var q=queries[i];
+      (r.value.query.search||[]).forEach(function(item){
+        var t=(item.title||'').trim();
+        if(!t||seen.has(t))return;
+        seen.add(t);
+        var desc=(item.snippet||'').replace(/<[^>]+>/g,'').replace(/&quot;/g,'"').replace(/&amp;/g,'&').trim();
+        var cat=classify(t,desc);
+        all.push({title:t,description:desc||'Read this article on Wikipedia.',
+          url:'https://en.wikipedia.org/wiki/'+encodeURIComponent(t.replace(/ /g,'_')),
+          image:'',publishedAt:new Date().toISOString(),
+          source:'Wikipedia',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0});
+      });
+    });
+    return all;
+  }catch(ex){console.log('[WNS] WikiNews failed:'+ex.message);return[];}
+}
+
+// ── SOURCE 5: Anthropic AI with web search ─────────────
+// Falls back gracefully if rate-limited
+async function fetchAI(categories, count){
+  try{
+    var res=await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        model:'claude-haiku-4-5-20251001',max_tokens:6000,
+        tools:[{type:'web_search_20250305',name:'web_search'}],
+        messages:[{role:'user',content:'Search the web now for '+count+' breaking news stories from the last 6 hours covering: '+categories+'. Sources: BBC, Reuters, AP, Al Jazeera, Bloomberg, Guardian, NPR, CNN, Fox News, TechCrunch, ESPN, NASA. Return ONLY a JSON array. Each item: {"title":"...","description":"2-3 sentence summary","url":"...","image":"image url or empty","publishedAt":"ISO timestamp","source":"publication","region":"Global/N.America/Europe/Asia-Pacific/Middle East/Africa","category":"World/Politics/Business/Technology/Health/Science/Climate/Sports/Entertainment/Arts"}. Start with [ end with ].'}]
+      })
+    });
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    var data=await res.json();
+    var text=(data.content||[]).filter(function(b){return b.type==='text';}).map(function(b){return b.text;}).join('');
+    var clean=text.replace(/```json|```/g,'').trim();
+    var s=clean.indexOf('['),en=clean.lastIndexOf(']');
+    if(s===-1||en===-1)throw new Error('No JSON');
+    var items=JSON.parse(clean.slice(s,en+1));
+    return items.map(function(a){
+      var t=(a.title||'').trim(), cat=a.category||classify(t,a.description||'');
+      return{title:t,description:(a.description||'').trim(),url:a.url||'#',image:a.image||'',
+        publishedAt:a.publishedAt||new Date().toISOString(),source:a.source||'News',
+        region:a.region||'Global',_cat:cat,_iq:iqKw(t,cat),_id:0};
+    }).filter(function(a){return a.title&&a.title.length>5;});
+  }catch(ex){
+    console.log('[WNS] AI failed ('+categories.split(',')[0].trim()+'): '+ex.message);
+    return[];
+  }
+}
+
+// ── MASTER FETCH ──────────────────────────────────────
 async function fetchAll(){
   setStep(1);
   var all=[], seen=new Set();
-  var log=[];
 
-  function merge(arr, src){
-    var added=0;
+  function merge(arr,src){
+    var n=0;
     (arr||[]).forEach(function(a){
       if(!a||!a.title||a.title.length<5)return;
       var k=a.title.slice(0,32).toLowerCase().replace(/\W/g,'');
       if(seen.has(k))return;
       seen.add(k);
       all.push(Object.assign({},a,{_id:all.length}));
-      added++;
+      n++;
     });
-    log.push(src+':'+added);
-    console.log('[WNS] '+src+': '+added+' stories added (total: '+all.length+')');
+    if(n>0)console.log('[WNS] '+src+': +'+n+' (total: '+all.length+')');
   }
 
+  // Step 2: Fire all guaranteed no-proxy sources in parallel
   setStep(2);
-  // Start HackerNews immediately — it's always fast and never rate-limited
-  var hnPromise = fetchHN();
+  var r1=await Promise.allSettled([fetchHN(), fetchWiki(), fetchWikiRecent(), fetchWikiNews()]);
+  r1.forEach(function(r,i){
+    if(r.status==='fulfilled') merge(r.value, ['HackerNews','WikiCurrentEvents','WikiRecent','WikiSearch'][i]);
+  });
 
-  // Run AI calls ONE AT A TIME with a 4-second gap between each
-  // This avoids the 429 rate limit from sending 3 simultaneous API requests
-  var group1 = await fetchAIGroup('World, Politics, Business, Climate', 10);
-  merge(group1, 'AI-Group1');
-  await new Promise(function(r){setTimeout(r,4000);}); // 4s gap
-
+  // Step 3: Try AI (with sequential calls to avoid 429)
   setStep(3);
-  var group2 = await fetchAIGroup('Technology, Science, Health', 10);
-  merge(group2, 'AI-Group2');
-  await new Promise(function(r){setTimeout(r,4000);}); // 4s gap
+  var ai1=await fetchAI('World, Politics, Business, Climate', 10);
+  merge(ai1,'AI-WorldPolitics');
+
+  if(ai1.length>0){
+    // Only try more AI calls if first one worked (not rate limited)
+    await new Promise(function(r){setTimeout(r,3000);});
+    var ai2=await fetchAI('Technology, Science, Health, Sports, Entertainment', 12);
+    merge(ai2,'AI-TechSports');
+  }
 
   setStep(4);
-  var group3 = await fetchAIGroup('Sports, Entertainment, Arts', 10);
-  merge(group3, 'AI-Group3');
+  if(!all.length) throw new Error('Unable to load news. All sources failed. Please try again in a moment.');
 
-  // Merge HackerNews results (should be done by now)
-  var hn = await hnPromise;
-  merge(hn, 'HackerNews');
-
-  console.log('[WNS] Final total: '+all.length+' stories | '+log.join(' | '));
-
-  if(!all.length){
-    throw new Error('Could not load news stories. Source log: '+log.join(', ')+'. Please try again.');
+  // Translation pass
+  var nonEn=all.filter(function(a){return needsTranslation(a.title)||needsTranslation(a.description);});
+  if(nonEn.length){
+    for(var j=0;j<nonEn.length;j+=6){
+      await Promise.allSettled(nonEn.slice(j,j+6).map(translateArticle));
+    }
   }
 
   setStep(5);
   all.sort(function(a,b){return(new Date(b.publishedAt).getTime()||0)-(new Date(a.publishedAt).getTime()||0);});
+  console.log('[WNS] Ready: '+all.length+' stories');
   return all;
 }
+
+
+// ── RSS PARSER ────────────────────────────────────────
+
+
+// Track which proxy is working best to avoid retrying failed ones
+var bestProxy = 0;
+
+
+
+// ── FETCH: Wikipedia Current Events (no proxy needed) ─
+async function fetchWiki(){
+  try{
+    var url='https://en.wikipedia.org/w/api.php?action=query&titles=Portal:Current_events&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*&formatversion=2';
+    var r=await fetch(url,{signal:makeTimeout(10000)});
+    if(!r.ok)return[];
+    var data=await r.json();
+    var content=((((data.query||{}).pages||[])[0]||{}).revisions||[])[0];
+    var text=(content&&content.slots&&content.slots.main&&content.slots.main.content)||'';
+    var all=[];
+    text.split('\n').forEach(function(line){
+      var m=line.match(/^\*+\s*(.{20,200})/);
+      if(!m)return;
+      var raw=m[1].replace(/\[\[([^\]|]+)\|?[^\]]*\]\]/g,'$1').replace(/'{2,}/g,'').replace(/\{\{[^}]+\}\}/g,'').replace(/<[^>]+>/g,'').trim();
+      if(raw.length<20||raw.length>250)return;
+      var cat=classify(raw,'');
+      all.push({title:raw,description:'From Wikipedia Current Events. Click to read more on Wikipedia.',url:'https://en.wikipedia.org/wiki/Portal:Current_events',image:'',publishedAt:new Date().toISOString(),source:'Wikipedia',region:'Global',_cat:cat,_iq:iqKw(raw,cat),_id:0});
+    });
+    return all.slice(0,20);
+  }catch(ex){return[];}
+}
+
+// ── FETCH: HackerNews (guaranteed CORS-free) ──────────
+async function fetchHN(){
+  try{
+    var ids=await fetch('https://hacker-news.firebaseio.com/v0/topstories.json').then(function(r){return r.json();});
+    var items=await Promise.allSettled(ids.slice(0,30).map(function(id){
+      return fetch('https://hacker-news.firebaseio.com/v0/item/'+id+'.json').then(function(r){return r.json();}).catch(function(){return null;});
+    }));
+    var all=[];
+    items.forEach(function(r){
+      if(r.status!=='fulfilled'||!r.value||!r.value.title||r.value.type!=='story')return;
+      var t=r.value.title,cat=classify(t,'');
+      all.push({title:t,description:'Trending on Hacker News with '+(r.value.score||0)+' points and '+(r.value.descendants||0)+' comments.',url:r.value.url||'https://news.ycombinator.com/item?id='+r.value.id,image:'',publishedAt:new Date((r.value.time||Date.now()/1000)*1000).toISOString(),source:'Hacker News',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0});
+    });
+    return all;
+  }catch(ex){return[];}
+}
+
+// ── TRANSLATION ───────────────────────────────────────
+var xlCache={};
+function needsTranslation(text){
+  if(!text||text.length<6)return false;
+  if(/[\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u0400-\u04FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7FF\u0590-\u05FF\u0370-\u03FF]/.test(text))return true;
+  if(/\b(der|die|das|und|ist|ein|eine|nicht|auch|mit|von|für)\b/i.test(text))return true;
+  if(/\b(le|la|les|un|une|des|est|dans|sur|avec|pour|que|qui)\b/i.test(text))return true;
+  if(/\b(el|los|las|del|una|con|por|para|que|como|más|pero|fue)\b/i.test(text))return true;
+  if(/\b(il|lo|della|dei|nel|sul|per|che|non|ma|si|ha|sono)\b/i.test(text))return true;
+  return false;
+}
+async function translateText(text){
+  if(!text||!needsTranslation(text))return text;
+  var key=text.slice(0,50);
+  if(xlCache[key])return xlCache[key];
+  try{
+    var r=await fetch('https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q='+encodeURIComponent(text.slice(0,500)));
+    if(!r.ok)return text;
+    var d=await r.json();
+    var out='';
+    if(d&&d[0])d[0].forEach(function(chunk){if(chunk&&chunk[0])out+=chunk[0];});
+    xlCache[key]=out.trim()||text;
+    return xlCache[key];
+  }catch(ex){return text;}
+}
+async function translateArticle(a){
+  try{
+    var res=await Promise.all([translateText(a.title),translateText(a.description)]);
+    if(res[0]&&res[0]!==a.title){a.title=res[0];a._translated=true;}
+    if(res[1]&&res[1]!==a.description){a.description=res[1];a._translated=true;}
+  }catch(ex){}
+  return a;
+}
+
+// ── MASTER FETCH ──────────────────────────────────────
 
 // ── RENDER HELPERS ────────────────────────────────────
 function tagH(cat,sm){
