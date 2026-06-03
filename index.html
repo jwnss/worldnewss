@@ -242,130 +242,172 @@ function iqKw(t,cat){
 // ══════════════════════════════════════════════════════
 
 // ══════════════════════════════════════════════════════
-// NEWS FETCH — No proxies, no AbortController
-// Uses only APIs with native CORS support
+// NEWS FETCH — via news-proxy.php (server-side, same domain)
+// No CORS issues, no third-party proxies, no API keys
+// Pulls from BBC, CNN, Reuters, Fox, Guardian, NPR & more
 // ══════════════════════════════════════════════════════
 
-// ── SOURCE 1: HackerNews Firebase API ─────────────────
-// Native CORS, no key, always works
+// All feed keys — must exactly match keys in news-proxy.php
+var FEED_KEYS = [
+  // BBC (8 feeds)
+  'bbc_world','bbc_uk','bbc_tech','bbc_business','bbc_health','bbc_science','bbc_sport','bbc_ents',
+  // NPR (6 feeds)
+  'npr_news','npr_world','npr_politics','npr_business','npr_health','npr_science',
+  // Al Jazeera
+  'aljazeera',
+  // CNN (6 feeds)
+  'cnn_top','cnn_world','cnn_us','cnn_tech','cnn_health','cnn_sport',
+  // Fox News (6 feeds)
+  'fox_top','fox_world','fox_politics','fox_science','fox_health','fox_sport',
+  // ABC / NBC
+  'abc_top','abc_world','abc_politics','nbc_top',
+  // The Guardian (8 feeds)
+  'guardian_world','guardian_us','guardian_tech','guardian_biz','guardian_sport','guardian_sci','guardian_env','guardian_arts',
+  // Reuters (6 feeds)
+  'reuters_world','reuters_us','reuters_biz','reuters_tech','reuters_health','reuters_sport',
+  // Tech
+  'techcrunch','ars_technica','the_verge','wired',
+  // Business
+  'cnbc','marketwatch',
+  // Politics
+  'politico','the_hill',
+  // Science
+  'science_daily','nasa','space_com',
+  // Sports
+  'espn','sky_sports',
+  // Entertainment
+  'variety','deadline',
+  // International
+  'dw_news','nhk_world','abc_australia','times_india','sky_news',
+  // Climate
+  'carbon_brief',
+];
+
+// Parse a proxy response into story objects
+function parseFeedItems(data, feedKey){
+  if(!data||!data.items||!data.items.length) return [];
+
+  // Source names per feed key
+  var srcMap={
+    bbc_world:'BBC',bbc_uk:'BBC',bbc_tech:'BBC Technology',bbc_business:'BBC Business',
+    bbc_health:'BBC Health',bbc_science:'BBC Science',bbc_sport:'BBC Sport',bbc_ents:'BBC',
+    npr_news:'NPR',npr_politics:'NPR Politics',npr_business:'NPR Business',
+    npr_health:'NPR Health',npr_science:'NPR Science',npr_world:'NPR',
+    aljazeera:'Al Jazeera',
+    cnn_top:'CNN',cnn_world:'CNN World',cnn_us:'CNN',cnn_tech:'CNN Tech',
+    cnn_health:'CNN Health',cnn_sport:'CNN Sport',
+    fox_top:'Fox News',fox_world:'Fox News',fox_politics:'Fox News',
+    fox_science:'Fox News',fox_health:'Fox News',fox_sport:'Fox News',
+    abc_top:'ABC News',abc_world:'ABC News',abc_politics:'ABC News',
+    nbc_top:'NBC News',
+    guardian_world:'The Guardian',guardian_us:'The Guardian',guardian_tech:'The Guardian',
+    guardian_biz:'The Guardian',guardian_sport:'The Guardian',guardian_sci:'The Guardian',
+    guardian_env:'The Guardian',guardian_arts:'The Guardian',
+    reuters_world:'Reuters',reuters_us:'Reuters',reuters_biz:'Reuters',
+    reuters_tech:'Reuters',reuters_health:'Reuters',reuters_sport:'Reuters',
+    techcrunch:'TechCrunch',ars_technica:'Ars Technica',the_verge:'The Verge',wired:'Wired',
+    cnbc:'CNBC',marketwatch:'MarketWatch',
+    politico:'Politico',the_hill:'The Hill',
+    science_daily:'Science Daily',nasa:'NASA',space_com:'Space.com',
+    espn:'ESPN',sky_sports:'Sky Sports',
+    variety:'Variety',deadline:'Deadline',
+    dw_news:'DW News',nhk_world:'NHK World',abc_australia:'ABC Australia',
+    times_india:'Times of India',sky_news:'Sky News',carbon_brief:'Carbon Brief',
+  };
+
+  // Forced category per feed key (null = auto-classify from title)
+  var catMap={
+    bbc_world:'World',bbc_uk:'World',bbc_tech:'Technology',bbc_business:'Business',
+    bbc_health:'Health',bbc_science:'Science',bbc_sport:'Sports',bbc_ents:'Entertainment',
+    npr_politics:'Politics',npr_business:'Business',npr_health:'Health',npr_science:'Science',
+    aljazeera:'World',
+    cnn_world:'World',cnn_tech:'Technology',cnn_health:'Health',cnn_sport:'Sports',
+    fox_world:'World',fox_politics:'Politics',fox_science:'Science',fox_health:'Health',fox_sport:'Sports',
+    abc_world:'World',abc_politics:'Politics',
+    guardian_world:'World',guardian_us:'World',guardian_tech:'Technology',guardian_biz:'Business',
+    guardian_sport:'Sports',guardian_sci:'Science',guardian_env:'Climate',guardian_arts:'Arts',
+    reuters_world:'World',reuters_us:'World',reuters_biz:'Business',
+    reuters_tech:'Technology',reuters_health:'Health',reuters_sport:'Sports',
+    techcrunch:'Technology',ars_technica:'Technology',the_verge:'Technology',wired:'Technology',
+    cnbc:'Business',marketwatch:'Business',
+    politico:'Politics',the_hill:'Politics',
+    science_daily:'Science',nasa:'Science',space_com:'Science',
+    espn:'Sports',sky_sports:'Sports',
+    variety:'Entertainment',deadline:'Entertainment',
+    dw_news:'World',nhk_world:'World',abc_australia:'World',
+    times_india:'World',sky_news:'World',carbon_brief:'Climate',
+  };
+
+  var regionMap={
+    aljazeera:'Middle East',dw_news:'Europe',nhk_world:'Asia-Pacific',
+    abc_australia:'Asia-Pacific',times_india:'South Asia',sky_news:'Europe',
+    guardian_world:'Europe',guardian_us:'N.America',guardian_tech:'Europe',
+    guardian_biz:'Europe',guardian_sport:'Europe',guardian_sci:'Europe',
+    guardian_env:'Global',guardian_arts:'Europe',
+  };
+
+  var src=srcMap[feedKey]||feedKey;
+  var forceCat=catMap[feedKey]||null;
+  var region=regionMap[feedKey]||'Global';
+
+  return data.items.map(function(item){
+    var t=(item.title||'').trim();
+    if(!t||t.length<8) return null;
+    // PHP now sends 'desc' and 'date'
+    var desc=(item.desc||item.description||'').trim();
+    var url=item.url||item.link||'#';
+    var img=item.image||item.img||'';
+    var pub=item.date||item.pubDate||new Date().toISOString();
+    var cat=forceCat||classify(t,desc);
+    return{
+      title:t, description:desc||'Click to read the full story.',
+      url:url, image:img, publishedAt:pub,
+      source:src, region:region,
+      _cat:cat, _iq:iqKw(t,cat), _id:0,
+    };
+  }).filter(Boolean);
+}
+
+// Fetch one feed via the PHP proxy
+async function fetchFeed(feedKey){
+  try{
+    var r=await fetch('/news-proxy.php?feed='+feedKey);
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    var data=await r.json();
+    if(data.error) throw new Error(data.error);
+    return parseFeedItems(data, feedKey);
+  }catch(ex){
+    console.log('[WNS] Feed failed: '+feedKey+' — '+ex.message);
+    return [];
+  }
+}
+
+// ── FALLBACK: HackerNews (works without PHP proxy) ────
 async function fetchHN(){
   try{
-    var ids=await fetch('https://hacker-news.firebaseio.com/v0/topstories.json')
-      .then(function(r){return r.json();});
-    var top=ids.slice(0,40);
-    var results=await Promise.allSettled(top.map(function(id){
-      return fetch('https://hacker-news.firebaseio.com/v0/item/'+id+'.json')
-        .then(function(r){return r.json();}).catch(function(){return null;});
+    var ids=await fetch('https://hacker-news.firebaseio.com/v0/topstories.json').then(function(r){return r.json();});
+    var results=await Promise.allSettled(ids.slice(0,30).map(function(id){
+      return fetch('https://hacker-news.firebaseio.com/v0/item/'+id+'.json').then(function(r){return r.json();}).catch(function(){return null;});
     }));
     var all=[];
     results.forEach(function(r){
       if(r.status!=='fulfilled'||!r.value||!r.value.title||r.value.type!=='story')return;
       var t=r.value.title, cat=classify(t,'');
-      all.push({
-        title:t,
-        description:'Trending on Hacker News with '+(r.value.score||0)+' points and '+(r.value.descendants||0)+' comments.',
-        url:r.value.url||'https://news.ycombinator.com/item?id='+r.value.id,
-        image:'',publishedAt:new Date((r.value.time||Date.now()/1000)*1000).toISOString(),
-        source:'Hacker News',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0
-      });
+      all.push({title:t,description:'Trending with '+(r.value.score||0)+' points and '+(r.value.descendants||0)+' comments on Hacker News.',url:r.value.url||'https://news.ycombinator.com/item?id='+r.value.id,image:'',publishedAt:new Date((r.value.time||Date.now()/1000)*1000).toISOString(),source:'Hacker News',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0});
     });
     return all;
-  }catch(ex){console.log('[WNS] HN failed:'+ex.message);return[];}
+  }catch(ex){return[];}
 }
 
-// ── SOURCE 2: Wikipedia Current Events ────────────────
-// Native CORS via origin=*, no key, no proxy
-async function fetchWiki(){
-  try{
-    var url='https://en.wikipedia.org/w/api.php?action=query&titles=Portal:Current_events&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*&formatversion=2';
-    var data=await fetch(url).then(function(r){return r.json();});
-    var rev=((((data.query||{}).pages||[])[0]||{}).revisions||[])[0];
-    var text=(rev&&rev.slots&&rev.slots.main&&rev.slots.main.content)||'';
-    var all=[];
-    text.split('\n').forEach(function(line){
-      var m=line.match(/^\*+\s*(.{25,200})/);
-      if(!m)return;
-      var raw=m[1]
-        .replace(/\[\[([^\]|]+)\|?[^\]]*\]\]/g,'$1')
-        .replace(/'{2,}/g,'')
-        .replace(/\{\{[^}]+\}\}/g,'')
-        .replace(/<[^>]+>/g,'')
-        .trim();
-      if(raw.length<25||raw.length>250||raw.includes('{{'))return;
-      var cat=classify(raw,'');
-      all.push({title:raw,description:'Current event from Wikipedia. Click to read more.',
-        url:'https://en.wikipedia.org/wiki/Portal:Current_events',
-        image:'',publishedAt:new Date().toISOString(),
-        source:'Wikipedia',region:'Global',_cat:cat,_iq:iqKw(raw,cat),_id:0});
-    });
-    return all.slice(0,25);
-  }catch(ex){console.log('[WNS] Wiki failed:'+ex.message);return[];}
-}
-
-// ── SOURCE 3: Wikipedia Recent Changes ────────────────
-// Different endpoint — pulls actively edited news articles
-async function fetchWikiRecent(){
-  try{
-    var url='https://en.wikipedia.org/w/api.php?action=query&list=recentchanges&rcnamespace=0&rclimit=50&rcprop=title|timestamp|comment&rctype=edit&format=json&origin=*';
-    var data=await fetch(url).then(function(r){return r.json();});
-    var changes=(data.query||{}).recentchanges||[];
-    var seen=new Set(), all=[];
-    changes.forEach(function(c){
-      var t=(c.title||'').replace(/_/g,' ').trim();
-      if(!t||t.length<8||seen.has(t))return;
-      // Filter to news-worthy titles (not talk pages, user pages etc)
-      if(/^(Talk|User|Wikipedia|File|Template|Help|Category|Portal|Draft|Module):/i.test(t))return;
-      seen.add(t);
-      var cat=classify(t,c.comment||'');
-      all.push({title:t,description:'Breaking: This Wikipedia article is being actively updated right now. '+
-        (c.comment?'Edit summary: '+c.comment.slice(0,120)+'.':'Click to read the latest.'),
-        url:'https://en.wikipedia.org/wiki/'+encodeURIComponent(t.replace(/ /g,'_')),
-        image:'',publishedAt:c.timestamp||new Date().toISOString(),
-        source:'Wikipedia Live',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0});
-    });
-    return all.slice(0,20);
-  }catch(ex){console.log('[WNS] WikiRecent failed:'+ex.message);return[];}
-}
-
-// ── SOURCE 4: Wikipedia News Search ───────────────────
-// Search for articles in the news category
-async function fetchWikiNews(){
-  try{
-    var queries=['breaking news today','world news','politics news','technology news','science news','sports news','business economy','health medical','climate environment','entertainment'];
-    var all=[], seen=new Set();
-    var results=await Promise.allSettled(queries.slice(0,5).map(function(q){
-      var url='https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch='+encodeURIComponent(q)+'&srlimit=8&srprop=snippet&format=json&origin=*';
-      return fetch(url).then(function(r){return r.json();});
-    }));
-    results.forEach(function(r,i){
-      if(r.status!=='fulfilled'||!r.value||!r.value.query)return;
-      var q=queries[i];
-      (r.value.query.search||[]).forEach(function(item){
-        var t=(item.title||'').trim();
-        if(!t||seen.has(t))return;
-        seen.add(t);
-        var desc=(item.snippet||'').replace(/<[^>]+>/g,'').replace(/&quot;/g,'"').replace(/&amp;/g,'&').trim();
-        var cat=classify(t,desc);
-        all.push({title:t,description:desc||'Read this article on Wikipedia.',
-          url:'https://en.wikipedia.org/wiki/'+encodeURIComponent(t.replace(/ /g,'_')),
-          image:'',publishedAt:new Date().toISOString(),
-          source:'Wikipedia',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0});
-      });
-    });
-    return all;
-  }catch(ex){console.log('[WNS] WikiNews failed:'+ex.message);return[];}
-}
-
-// ── SOURCE 5: Anthropic AI with web search ─────────────
-// Falls back gracefully if rate-limited
+// ── FALLBACK: Anthropic AI web search ─────────────────
 async function fetchAI(categories, count){
   try{
     var res=await fetch('https://api.anthropic.com/v1/messages',{
       method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({
-        model:'claude-haiku-4-5-20251001',max_tokens:6000,
+        model:'claude-haiku-4-5-20251001',max_tokens:5000,
         tools:[{type:'web_search_20250305',name:'web_search'}],
-        messages:[{role:'user',content:'Search the web now for '+count+' breaking news stories from the last 6 hours covering: '+categories+'. Sources: BBC, Reuters, AP, Al Jazeera, Bloomberg, Guardian, NPR, CNN, Fox News, TechCrunch, ESPN, NASA. Return ONLY a JSON array. Each item: {"title":"...","description":"2-3 sentence summary","url":"...","image":"image url or empty","publishedAt":"ISO timestamp","source":"publication","region":"Global/N.America/Europe/Asia-Pacific/Middle East/Africa","category":"World/Politics/Business/Technology/Health/Science/Climate/Sports/Entertainment/Arts"}. Start with [ end with ].'}]
+        messages:[{role:'user',content:'Search for '+count+' breaking news stories from the last 6 hours covering: '+categories+'. Use BBC, Reuters, AP, Al Jazeera, Bloomberg, Guardian, NPR, CNN, Fox News, TechCrunch, ESPN. Return ONLY a JSON array. Each item: {"title":"...","description":"2-3 sentence summary","url":"...","image":"url or empty","publishedAt":"ISO","source":"publication","region":"Global/N.America/Europe/Asia-Pacific/Middle East/Africa","category":"World/Politics/Business/Technology/Health/Science/Climate/Sports/Entertainment/Arts"}. Start with [ end with ].'}]
       })
     });
     if(!res.ok)throw new Error('HTTP '+res.status);
@@ -376,128 +418,21 @@ async function fetchAI(categories, count){
     if(s===-1||en===-1)throw new Error('No JSON');
     var items=JSON.parse(clean.slice(s,en+1));
     return items.map(function(a){
-      var t=(a.title||'').trim(), cat=a.category||classify(t,a.description||'');
-      return{title:t,description:(a.description||'').trim(),url:a.url||'#',image:a.image||'',
-        publishedAt:a.publishedAt||new Date().toISOString(),source:a.source||'News',
-        region:a.region||'Global',_cat:cat,_iq:iqKw(t,cat),_id:0};
+      var t=(a.title||'').trim(),cat=a.category||classify(t,a.description||'');
+      return{title:t,description:(a.description||'').trim(),url:a.url||'#',image:a.image||'',publishedAt:a.publishedAt||new Date().toISOString(),source:a.source||'News',region:a.region||'Global',_cat:cat,_iq:iqKw(t,cat),_id:0};
     }).filter(function(a){return a.title&&a.title.length>5;});
-  }catch(ex){
-    console.log('[WNS] AI failed ('+categories.split(',')[0].trim()+'): '+ex.message);
-    return[];
-  }
-}
-
-// ── MASTER FETCH ──────────────────────────────────────
-async function fetchAll(){
-  setStep(1);
-  var all=[], seen=new Set();
-
-  function merge(arr,src){
-    var n=0;
-    (arr||[]).forEach(function(a){
-      if(!a||!a.title||a.title.length<5)return;
-      var k=a.title.slice(0,32).toLowerCase().replace(/\W/g,'');
-      if(seen.has(k))return;
-      seen.add(k);
-      all.push(Object.assign({},a,{_id:all.length}));
-      n++;
-    });
-    if(n>0)console.log('[WNS] '+src+': +'+n+' (total: '+all.length+')');
-  }
-
-  // Step 2: Fire all guaranteed no-proxy sources in parallel
-  setStep(2);
-  var r1=await Promise.allSettled([fetchHN(), fetchWiki(), fetchWikiRecent(), fetchWikiNews()]);
-  r1.forEach(function(r,i){
-    if(r.status==='fulfilled') merge(r.value, ['HackerNews','WikiCurrentEvents','WikiRecent','WikiSearch'][i]);
-  });
-
-  // Step 3: Try AI (with sequential calls to avoid 429)
-  setStep(3);
-  var ai1=await fetchAI('World, Politics, Business, Climate', 10);
-  merge(ai1,'AI-WorldPolitics');
-
-  if(ai1.length>0){
-    // Only try more AI calls if first one worked (not rate limited)
-    await new Promise(function(r){setTimeout(r,3000);});
-    var ai2=await fetchAI('Technology, Science, Health, Sports, Entertainment', 12);
-    merge(ai2,'AI-TechSports');
-  }
-
-  setStep(4);
-  if(!all.length) throw new Error('Unable to load news. All sources failed. Please try again in a moment.');
-
-  // Translation pass
-  var nonEn=all.filter(function(a){return needsTranslation(a.title)||needsTranslation(a.description);});
-  if(nonEn.length){
-    for(var j=0;j<nonEn.length;j+=6){
-      await Promise.allSettled(nonEn.slice(j,j+6).map(translateArticle));
-    }
-  }
-
-  setStep(5);
-  all.sort(function(a,b){return(new Date(b.publishedAt).getTime()||0)-(new Date(a.publishedAt).getTime()||0);});
-  console.log('[WNS] Ready: '+all.length+' stories');
-  return all;
-}
-
-
-// ── RSS PARSER ────────────────────────────────────────
-
-
-// Track which proxy is working best to avoid retrying failed ones
-var bestProxy = 0;
-
-
-
-// ── FETCH: Wikipedia Current Events (no proxy needed) ─
-async function fetchWiki(){
-  try{
-    var url='https://en.wikipedia.org/w/api.php?action=query&titles=Portal:Current_events&prop=revisions&rvprop=content&rvslots=main&format=json&origin=*&formatversion=2';
-    var r=await fetch(url,{signal:makeTimeout(10000)});
-    if(!r.ok)return[];
-    var data=await r.json();
-    var content=((((data.query||{}).pages||[])[0]||{}).revisions||[])[0];
-    var text=(content&&content.slots&&content.slots.main&&content.slots.main.content)||'';
-    var all=[];
-    text.split('\n').forEach(function(line){
-      var m=line.match(/^\*+\s*(.{20,200})/);
-      if(!m)return;
-      var raw=m[1].replace(/\[\[([^\]|]+)\|?[^\]]*\]\]/g,'$1').replace(/'{2,}/g,'').replace(/\{\{[^}]+\}\}/g,'').replace(/<[^>]+>/g,'').trim();
-      if(raw.length<20||raw.length>250)return;
-      var cat=classify(raw,'');
-      all.push({title:raw,description:'From Wikipedia Current Events. Click to read more on Wikipedia.',url:'https://en.wikipedia.org/wiki/Portal:Current_events',image:'',publishedAt:new Date().toISOString(),source:'Wikipedia',region:'Global',_cat:cat,_iq:iqKw(raw,cat),_id:0});
-    });
-    return all.slice(0,20);
-  }catch(ex){return[];}
-}
-
-// ── FETCH: HackerNews (guaranteed CORS-free) ──────────
-async function fetchHN(){
-  try{
-    var ids=await fetch('https://hacker-news.firebaseio.com/v0/topstories.json').then(function(r){return r.json();});
-    var items=await Promise.allSettled(ids.slice(0,30).map(function(id){
-      return fetch('https://hacker-news.firebaseio.com/v0/item/'+id+'.json').then(function(r){return r.json();}).catch(function(){return null;});
-    }));
-    var all=[];
-    items.forEach(function(r){
-      if(r.status!=='fulfilled'||!r.value||!r.value.title||r.value.type!=='story')return;
-      var t=r.value.title,cat=classify(t,'');
-      all.push({title:t,description:'Trending on Hacker News with '+(r.value.score||0)+' points and '+(r.value.descendants||0)+' comments.',url:r.value.url||'https://news.ycombinator.com/item?id='+r.value.id,image:'',publishedAt:new Date((r.value.time||Date.now()/1000)*1000).toISOString(),source:'Hacker News',region:'Global',_cat:cat,_iq:iqKw(t,cat),_id:0});
-    });
-    return all;
-  }catch(ex){return[];}
+  }catch(ex){console.log('[WNS] AI failed ('+categories.split(',')[0].trim()+'): '+ex.message);return[];}
 }
 
 // ── TRANSLATION ───────────────────────────────────────
 var xlCache={};
 function needsTranslation(text){
   if(!text||text.length<6)return false;
-  if(/[\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u0400-\u04FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7FF\u0590-\u05FF\u0370-\u03FF]/.test(text))return true;
-  if(/\b(der|die|das|und|ist|ein|eine|nicht|auch|mit|von|für)\b/i.test(text))return true;
-  if(/\b(le|la|les|un|une|des|est|dans|sur|avec|pour|que|qui)\b/i.test(text))return true;
-  if(/\b(el|los|las|del|una|con|por|para|que|como|más|pero|fue)\b/i.test(text))return true;
-  if(/\b(il|lo|della|dei|nel|sul|per|che|non|ma|si|ha|sono)\b/i.test(text))return true;
+  if(/[\u0600-\u06FF\u0900-\u097F\u0E00-\u0E7F\u0400-\u04FF\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7FF]/.test(text))return true;
+  if(/\b(der|die|das|und|ist|nicht|auch|mit|von|für)\b/i.test(text))return true;
+  if(/\b(le|la|les|un|une|des|est|dans|sur|avec|pour|que)\b/i.test(text))return true;
+  if(/\b(el|los|las|del|una|con|por|para|que|más|pero)\b/i.test(text))return true;
+  if(/\b(il|lo|della|dei|nel|per|che|non|ma|sono)\b/i.test(text))return true;
   return false;
 }
 async function translateText(text){
@@ -524,6 +459,88 @@ async function translateArticle(a){
 }
 
 // ── MASTER FETCH ──────────────────────────────────────
+async function fetchAll(){
+  setStep(1);
+  var all=[], seen=new Set();
+
+  function merge(arr, src){
+    var n=0;
+    (arr||[]).forEach(function(a){
+      if(!a||!a.title||a.title.length<5) return;
+      var k=a.title.slice(0,32).toLowerCase().replace(/\W/g,'');
+      if(seen.has(k)) return;
+      seen.add(k);
+      all.push(Object.assign({},a,{_id:all.length}));
+      n++;
+    });
+    if(n>0) console.log('[WNS] '+src+': +'+n+' (total: '+all.length+')');
+    return n;
+  }
+
+  // Step 2: Check if PHP proxy is available
+  setStep(2);
+  var proxyOk=false;
+  try{
+    var test=await fetch('/news-proxy.php');
+    proxyOk=(test.status!==404);
+  }catch(ex){proxyOk=false;}
+
+  if(proxyOk){
+    // ── PHP PROXY PATH — fetch all 60 real news feeds ──
+    console.log('[WNS] PHP proxy found — fetching from 60 real news sources');
+    var batchSize=8;
+    for(var i=0; i<FEED_KEYS.length; i+=batchSize){
+      var batch=FEED_KEYS.slice(i,i+batchSize);
+      var results=await Promise.allSettled(batch.map(fetchFeed));
+      results.forEach(function(r,j){
+        if(r.status==='fulfilled'&&r.value.length) merge(r.value, batch[j]);
+      });
+      setStep(i===0?2:i<batchSize*2?3:4);
+    }
+  } else {
+    // ── FALLBACK PATH — PHP not uploaded yet, use AI + HN ──
+    console.log('[WNS] news-proxy.php not found — using fallback sources');
+    console.log('[WNS] To enable 60 real news sources, upload news-proxy.php to public_html');
+
+    setStep(2);
+    var hn=await fetchHN();
+    merge(hn,'HackerNews');
+
+    setStep(3);
+    var ai1=await fetchAI('World, Politics, Business, Climate, Health', 12);
+    merge(ai1,'AI-News-1');
+
+    if(ai1.length>0){
+      await new Promise(function(r){setTimeout(r,3000);});
+      setStep(4);
+      var ai2=await fetchAI('Technology, Science, Sports, Entertainment, Arts', 12);
+      merge(ai2,'AI-News-2');
+    }
+  }
+
+  if(!all.length){
+    throw new Error(
+      proxyOk
+        ? 'news-proxy.php returned no stories. Check GoDaddy error logs.'
+        : 'Could not load news. Please upload news-proxy.php to your GoDaddy public_html folder for full news coverage, then refresh.'
+    );
+  }
+
+  // Translation pass
+  setStep(4);
+  var nonEn=all.filter(function(a){return needsTranslation(a.title)||needsTranslation(a.description);});
+  if(nonEn.length){
+    for(var j=0;j<nonEn.length;j+=6){
+      await Promise.allSettled(nonEn.slice(j,j+6).map(translateArticle));
+    }
+  }
+
+  setStep(5);
+  all.sort(function(a,b){return(new Date(b.publishedAt).getTime()||0)-(new Date(a.publishedAt).getTime()||0);});
+  console.log('[WNS] Ready: '+all.length+' stories');
+  return all;
+}
+
 
 // ── RENDER HELPERS ────────────────────────────────────
 function tagH(cat,sm){
